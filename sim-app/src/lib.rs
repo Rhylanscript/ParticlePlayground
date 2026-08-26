@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
 use winit::{
-    event::{Event, WindowEvent}, 
-    event_loop::EventLoop, 
-    keyboard::{KeyCode, PhysicalKey}, 
+    event::{Event, WindowEvent},
+    event_loop::EventLoop,
+    keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowBuilder},
 };
 
@@ -41,9 +41,18 @@ impl Vertex {
 
 // placeholder - for now...
 const VERTICES: &[Vertex] = &[
-    Vertex { position: [0.0, 0.6, 0.0], color: [1.0, 0.3, 0.2] },
-    Vertex { position: [-0.6, -0.5, 0.0], color: [0.2, 0.4, 1.0] },
-    Vertex { position: [0.6, -0.5, 0.0], color: [0.3, 1.0, 0.4] },
+    Vertex {
+        position: [0.0, 0.6, 0.0],
+        color: [1.0, 0.3, 0.2],
+    },
+    Vertex {
+        position: [-0.6, -0.5, 0.0],
+        color: [0.2, 0.4, 1.0],
+    },
+    Vertex {
+        position: [0.6, -0.5, 0.0],
+        color: [0.3, 1.0, 0.4],
+    },
 ];
 
 struct State {
@@ -93,7 +102,7 @@ impl State {
                         wgpu::Limits::default()
                     },
                     label: None,
-                }, 
+                },
                 None,
             )
             .await
@@ -213,7 +222,12 @@ impl State {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.02, g: 0.02, b: 0.05, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.02,
+                            g: 0.02,
+                            b: 0.05,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -244,7 +258,7 @@ pub async fn run() {
     {
         env_logger::init();
     }
-    
+
     let event_loop = EventLoop::new().unwrap();
     let window = Arc::new(
         WindowBuilder::new()
