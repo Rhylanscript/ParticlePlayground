@@ -43,12 +43,24 @@ impl QuadVertex {
 }
 
 const QUAD_VERTICES: &[QuadVertex] = &[
-    QuadVertex { position: [-0.5, -0.5] },
-    QuadVertex { position: [0.5, -0.5] },
-    QuadVertex { position: [0.5, 0.5] },
-    QuadVertex { position: [-0.5, -0.5] },
-    QuadVertex { position: [0.5, 0.5] },
-    QuadVertex { position: [-0.5, 0.5] },
+    QuadVertex {
+        position: [-0.5, -0.5],
+    },
+    QuadVertex {
+        position: [0.5, -0.5],
+    },
+    QuadVertex {
+        position: [0.5, 0.5],
+    },
+    QuadVertex {
+        position: [-0.5, -0.5],
+    },
+    QuadVertex {
+        position: [0.5, 0.5],
+    },
+    QuadVertex {
+        position: [-0.5, 0.5],
+    },
 ];
 
 #[repr(C)]
@@ -112,7 +124,8 @@ fn spawn_demo_particles(count: usize) -> sim_core::Simulation {
         let position = Vec3::new(angle.cos() * radius, angle.sin() * radius, 0.0);
         let charge = if rng.gen_bool(0.5) { 1.0 } else { -1.0 };
         let mass = rng.gen_range(0.5..2.0);
-        sim.particles.push(sim_core::Particle::new(position, mass, charge));
+        sim.particles
+            .push(sim_core::Particle::new(position, mass, charge));
     }
     sim
 }
@@ -373,16 +386,24 @@ impl State {
 
         let pan_speed = self.camera.zoom * 0.6 * dt;
         let mut pan = Vec2::ZERO;
-        if self.pressed_keys.contains(&KeyCode::KeyW) || self.pressed_keys.contains(&KeyCode::ArrowUp) {
+        if self.pressed_keys.contains(&KeyCode::KeyW)
+            || self.pressed_keys.contains(&KeyCode::ArrowUp)
+        {
             pan.y += pan_speed;
         }
-        if self.pressed_keys.contains(&KeyCode::KeyS) || self.pressed_keys.contains(&KeyCode::ArrowDown) {
+        if self.pressed_keys.contains(&KeyCode::KeyS)
+            || self.pressed_keys.contains(&KeyCode::ArrowDown)
+        {
             pan.y -= pan_speed;
         }
-        if self.pressed_keys.contains(&KeyCode::KeyA) || self.pressed_keys.contains(&KeyCode::ArrowLeft) {
+        if self.pressed_keys.contains(&KeyCode::KeyA)
+            || self.pressed_keys.contains(&KeyCode::ArrowLeft)
+        {
             pan.x -= pan_speed;
         }
-        if self.pressed_keys.contains(&KeyCode::KeyD) || self.pressed_keys.contains(&KeyCode::ArrowRight) {
+        if self.pressed_keys.contains(&KeyCode::KeyD)
+            || self.pressed_keys.contains(&KeyCode::ArrowRight)
+        {
             pan.x += pan_speed;
         }
         self.camera.pan(pan);
