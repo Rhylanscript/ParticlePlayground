@@ -7,3 +7,9 @@ Thumbs.db
 
 /sim-app/dist
 **/*.rs.bk
+
+# logs
+log.txt
+logs.txt
+*.log
+*.logs
