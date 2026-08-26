@@ -63,6 +63,45 @@ const QUAD_VERTICES: &[QuadVertex] = &[
     },
 ];
 
+const FULLSCREEN_QUAD: &[QuadVertex] = &[
+    QuadVertex {
+        position: [-1.0, -1.0],
+    },
+    QuadVertex {
+        position: [1.0, -1.0],
+    },
+    QuadVertex {
+        position: [1.0, 1.0],
+    },
+    QuadVertex {
+        position: [-1.0, -1.0],
+    },
+    QuadVertex {
+        position: [1.0, 1.0],
+    },
+    QuadVertex {
+        position: [-1.0, 1.0],
+    },
+];
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct GridUniform {
+    params: [f32; 4],
+}
+
+impl GridUniform {
+    fn update(&mut self, camera: &Camera, aspect: f32) {
+        let half_extents = camera.half_extents(aspect);
+        self.params = [
+            camera.center.x,
+            camera.center.y,
+            half_extents.x,
+            half_extents.y,
+        ];
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct ParticleInstance {
@@ -159,6 +198,12 @@ struct State {
     render_pipeline: wgpu::RenderPipeline,
     quad_vertex_buffer: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
+
+    background_pipeline: wgpu::RenderPipeline,
+    background_vertex_buffer: wgpu::Buffer,
+    grid_uniform: GridUniform,
+    grid_buffer: wgpu::Buffer,
+    grid_bind_group: wgpu::BindGroup,
 
     camera: Camera,
     camera_uniform: CameraUniform,
@@ -328,6 +373,95 @@ impl State {
             mapped_at_creation: false,
         });
 
+        let grid_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("grid shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("grid_shader.wgsl").into()),
+        });
+
+        let mut grid_uniform = GridUniform { params: [0.0; 4] };
+        grid_uniform.update(&camera, config.width as f32 / config.height as f32);
+
+        let grid_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("grid buffer"),
+            contents: bytemuck::cast_slice(&[grid_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let grid_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("grid bind group layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        let grid_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("grid bind group"),
+            layout: &grid_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: grid_buffer.as_entire_binding(),
+            }],
+        });
+
+        let background_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("background pipeline layout"),
+                bind_group_layouts: &[&grid_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let background_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("background pipeline"),
+            layout: Some(&background_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &grid_shader,
+                entry_point: "vs_main",
+                buffers: &[QuadVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &grid_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
+        let background_vertex_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("background vertex buffer"),
+                contents: bytemuck::cast_slice(FULLSCREEN_QUAD),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
         let simulation = spawn_demo_particles(DEMO_PARTICLE_COUNT);
 
         Self {
@@ -340,6 +474,11 @@ impl State {
             render_pipeline,
             quad_vertex_buffer,
             instance_buffer,
+            background_pipeline,
+            background_vertex_buffer,
+            grid_uniform,
+            grid_buffer,
+            grid_bind_group,
             camera,
             camera_uniform,
             camera_buffer,
@@ -418,6 +557,13 @@ impl State {
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
 
+        self.grid_uniform.update(&self.camera, aspect);
+        self.queue.write_buffer(
+            &self.grid_buffer,
+            0,
+            bytemuck::cast_slice(&[self.grid_uniform]),
+        );
+
         let instances = build_instances(&self.simulation);
         self.queue
             .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
@@ -445,9 +591,9 @@ impl State {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.02,
-                            g: 0.02,
-                            b: 0.05,
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -457,6 +603,11 @@ impl State {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
+
+            render_pass.set_pipeline(&self.background_pipeline);
+            render_pass.set_bind_group(0, &self.grid_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.background_vertex_buffer.slice(..));
+            render_pass.draw(0..FULLSCREEN_QUAD.len() as u32, 0..1);
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
