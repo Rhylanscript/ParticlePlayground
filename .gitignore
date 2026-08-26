@@ -1,0 +1,9 @@
+# os slop
+Thumbs.db
+.DS_STORE
+
+# rust stuff
+/target
+
+/sim-app/dist
+**/*.rs.bk

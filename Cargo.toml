@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "sim-core",
+    "sim-data",
+    "sim-app",
+]
