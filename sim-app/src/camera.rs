@@ -31,12 +31,18 @@ impl Camera {
         proj * view
     }
 
+    pub fn half_extents(&self, aspect: f32) -> Vec2 {
+        let half_height = self.zoom * 0.5;
+        let half_width = half_height * aspect;
+        Vec2::new(half_width, half_height)
+    }
+
     pub fn pan(&mut self, delta: Vec2) {
         self.center += delta;
     }
 
     pub fn zoom_by(&mut self, factor: f32) {
-        self.zoom = (self.zoom * factor).clamp(1.0, 200.0);
+        self.zoom = (self.zoom * factor).clamp(1.0, 400.0);
     }
 }
 
