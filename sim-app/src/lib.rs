@@ -1,59 +1,139 @@
+mod camera;
+
+use std::collections::HashSet;
 use std::sync::Arc;
 
+use glam::{Mat4, Vec2, Vec3};
+use rand::Rng;
 use wgpu::util::DeviceExt;
 use winit::{
-    event::{Event, WindowEvent},
+    event::{ElementState, Event, MouseScrollDelta, WindowEvent},
     event_loop::EventLoop,
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowBuilder},
 };
 
+use camera::Camera;
+
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+const DEMO_PARTICLE_COUNT: usize = 40;
+const INSTANCE_CAPACITY: usize = 2048;
+const MAX_DT: f32 = 0.05; // clamp so a slow frame doesn't blow up the sim
+
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct QuadVertex {
+    position: [f32; 2],
 }
 
-impl Vertex {
+impl QuadVertex {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            array_stride: std::mem::size_of::<QuadVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x2,
+            }],
+        }
+    }
+}
+
+const QUAD_VERTICES: &[QuadVertex] = &[
+    QuadVertex { position: [-0.5, -0.5] },
+    QuadVertex { position: [0.5, -0.5] },
+    QuadVertex { position: [0.5, 0.5] },
+    QuadVertex { position: [-0.5, -0.5] },
+    QuadVertex { position: [0.5, 0.5] },
+    QuadVertex { position: [-0.5, 0.5] },
+];
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct ParticleInstance {
+    position: [f32; 2],
+    color: [f32; 3],
+    radius: f32,
+}
+
+impl ParticleInstance {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<ParticleInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
                 wgpu::VertexAttribute {
                     offset: 0,
-                    shader_location: 0,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 8,
+                    shader_location: 2,
                     format: wgpu::VertexFormat::Float32x3,
                 },
                 wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 20,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32,
                 },
             ],
         }
     }
 }
 
-// placeholder - for now...
-const VERTICES: &[Vertex] = &[
-    Vertex {
-        position: [0.0, 0.6, 0.0],
-        color: [1.0, 0.3, 0.2],
-    },
-    Vertex {
-        position: [-0.6, -0.5, 0.0],
-        color: [0.2, 0.4, 1.0],
-    },
-    Vertex {
-        position: [0.6, -0.5, 0.0],
-        color: [0.3, 1.0, 0.4],
-    },
-];
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct CameraUniform {
+    view_proj: [[f32; 4]; 4],
+}
+
+impl CameraUniform {
+    fn identity() -> Self {
+        Self {
+            view_proj: Mat4::IDENTITY.to_cols_array_2d(),
+        }
+    }
+
+    fn update(&mut self, camera: &Camera, aspect: f32) {
+        self.view_proj = camera.view_proj(aspect).to_cols_array_2d();
+    }
+}
+
+fn spawn_demo_particles(count: usize) -> sim_core::Simulation {
+    let mut rng = rand::thread_rng();
+    let mut sim = sim_core::Simulation::new();
+    for _ in 0..count {
+        let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+        let radius = rng.gen_range(0.5..4.0);
+        let position = Vec3::new(angle.cos() * radius, angle.sin() * radius, 0.0);
+        let charge = if rng.gen_bool(0.5) { 1.0 } else { -1.0 };
+        let mass = rng.gen_range(0.5..2.0);
+        sim.particles.push(sim_core::Particle::new(position, mass, charge));
+    }
+    sim
+}
+
+fn build_instances(sim: &sim_core::Simulation) -> Vec<ParticleInstance> {
+    sim.particles
+        .iter()
+        .map(|p| {
+            let color = if p.charge > 0.0 {
+                [1.0, 0.35, 0.25]
+            } else {
+                [0.3, 0.55, 1.0]
+            };
+            ParticleInstance {
+                position: [p.position.x, p.position.y],
+                color,
+                radius: 0.12 + 0.04 * p.mass,
+            }
+        })
+        .collect()
+}
 
 struct State {
     surface: wgpu::Surface<'static>,
@@ -61,9 +141,20 @@ struct State {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
-    render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
     window: Arc<Window>,
+
+    render_pipeline: wgpu::RenderPipeline,
+    quad_vertex_buffer: wgpu::Buffer,
+    instance_buffer: wgpu::Buffer,
+
+    camera: Camera,
+    camera_uniform: CameraUniform,
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
+
+    simulation: sim_core::Simulation,
+    last_frame: web_time::Instant,
+    pressed_keys: HashSet<KeyCode>,
 }
 
 impl State {
@@ -90,7 +181,7 @@ impl State {
                 force_fallback_adapter: false,
             })
             .await
-            .expect("No suitable GPU adapter found");
+            .expect("no suitable GPU adapter found");
 
         let (device, queue) = adapter
             .request_device(
@@ -106,7 +197,7 @@ impl State {
                 None,
             )
             .await
-            .expect("Failed to create device");
+            .expect("failed to create device");
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -129,13 +220,47 @@ impl State {
         surface.configure(&device, &config);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("triangle shader"),
+            label: Some("particle shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
+
+        let camera = Camera::new();
+        let mut camera_uniform = CameraUniform::identity();
+        camera_uniform.update(&camera, config.width as f32 / config.height as f32);
+
+        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("camera buffer"),
+            contents: bytemuck::cast_slice(&[camera_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("camera bind group layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("camera bind group"),
+            layout: &camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("render pipeline layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&camera_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -145,7 +270,7 @@ impl State {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
+                buffers: &[QuadVertex::desc(), ParticleInstance::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -176,11 +301,21 @@ impl State {
             multiview: None,
         });
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("vertex buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
+        let quad_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("quad vertex buffer"),
+            contents: bytemuck::cast_slice(QUAD_VERTICES),
             usage: wgpu::BufferUsages::VERTEX,
         });
+
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("instance buffer"),
+            size: (INSTANCE_CAPACITY * std::mem::size_of::<ParticleInstance>())
+                as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let simulation = spawn_demo_particles(DEMO_PARTICLE_COUNT);
 
         Self {
             surface,
@@ -188,9 +323,17 @@ impl State {
             queue,
             config,
             size,
-            render_pipeline,
-            vertex_buffer,
             window,
+            render_pipeline,
+            quad_vertex_buffer,
+            instance_buffer,
+            camera,
+            camera_uniform,
+            camera_buffer,
+            camera_bind_group,
+            simulation,
+            last_frame: web_time::Instant::now(),
+            pressed_keys: HashSet::new(),
         }
     }
 
@@ -201,6 +344,62 @@ impl State {
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
         }
+    }
+
+    fn handle_key(&mut self, code: KeyCode, state: ElementState) {
+        match state {
+            ElementState::Pressed => {
+                self.pressed_keys.insert(code);
+            }
+            ElementState::Released => {
+                self.pressed_keys.remove(&code);
+            }
+        }
+    }
+
+    fn handle_scroll(&mut self, delta: MouseScrollDelta) {
+        let scroll_y = match delta {
+            MouseScrollDelta::LineDelta(_, y) => y,
+            MouseScrollDelta::PixelDelta(pos) => (pos.y / 100.0) as f32,
+        };
+        let zoom_factor = 1.0 - scroll_y * 0.1;
+        self.camera.zoom_by(zoom_factor);
+    }
+
+    fn update(&mut self) {
+        let now = web_time::Instant::now();
+        let dt = (now - self.last_frame).as_secs_f32().min(MAX_DT);
+        self.last_frame = now;
+
+        let pan_speed = self.camera.zoom * 0.6 * dt;
+        let mut pan = Vec2::ZERO;
+        if self.pressed_keys.contains(&KeyCode::KeyW) || self.pressed_keys.contains(&KeyCode::ArrowUp) {
+            pan.y += pan_speed;
+        }
+        if self.pressed_keys.contains(&KeyCode::KeyS) || self.pressed_keys.contains(&KeyCode::ArrowDown) {
+            pan.y -= pan_speed;
+        }
+        if self.pressed_keys.contains(&KeyCode::KeyA) || self.pressed_keys.contains(&KeyCode::ArrowLeft) {
+            pan.x -= pan_speed;
+        }
+        if self.pressed_keys.contains(&KeyCode::KeyD) || self.pressed_keys.contains(&KeyCode::ArrowRight) {
+            pan.x += pan_speed;
+        }
+        self.camera.pan(pan);
+
+        self.simulation.step(dt);
+
+        let aspect = self.config.width as f32 / self.config.height as f32;
+        self.camera_uniform.update(&self.camera, aspect);
+        self.queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[self.camera_uniform]),
+        );
+
+        let instances = build_instances(&self.simulation);
+        self.queue
+            .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -214,6 +413,8 @@ impl State {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render encoder"),
             });
+
+        let instance_count = self.simulation.particles.len().min(INSTANCE_CAPACITY) as u32;
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -237,8 +438,10 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.draw(0..VERTICES.len() as u32, 0..1);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            render_pass.draw(0..QUAD_VERTICES.len() as u32, 0..instance_count);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -252,7 +455,7 @@ pub async fn run() {
     #[cfg(target_arch = "wasm32")]
     {
         std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-        console_log::init_with_level(log::Level::Info).expect("Failed to init logger");
+        console_log::init_with_level(log::Level::Info).expect("failed to init logger");
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -262,7 +465,7 @@ pub async fn run() {
     let event_loop = EventLoop::new().unwrap();
     let window = Arc::new(
         WindowBuilder::new()
-            .with_title("Particle Playground")
+            .with_title("Particle Physics Simulator")
             .build(&event_loop)
             .unwrap(),
     );
@@ -278,7 +481,7 @@ pub async fn run() {
                 canvas.set_id("sim-canvas");
                 dst.append_child(&canvas).ok()
             })
-            .expect("Couldn't append canvas to document");
+            .expect("couldn't append canvas to document");
     }
 
     let mut state = State::new(window.clone()).await;
@@ -292,16 +495,24 @@ pub async fn run() {
                 match event {
                     WindowEvent::CloseRequested => elwt.exit(),
                     WindowEvent::Resized(physical_size) => state.resize(physical_size),
+                    WindowEvent::MouseWheel { delta, .. } => state.handle_scroll(delta),
                     WindowEvent::KeyboardInput {
                         event:
                             winit::event::KeyEvent {
-                                physical_key: PhysicalKey::Code(KeyCode::Escape),
-                                state: winit::event::ElementState::Pressed,
+                                physical_key: PhysicalKey::Code(code),
+                                state: key_state,
                                 ..
                             },
                         ..
-                    } => elwt.exit(),
+                    } => {
+                        if code == KeyCode::Escape && key_state == ElementState::Pressed {
+                            elwt.exit();
+                        } else {
+                            state.handle_key(code, key_state);
+                        }
+                    }
                     WindowEvent::RedrawRequested => {
+                        state.update();
                         match state.render() {
                             Ok(_) => {}
                             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
