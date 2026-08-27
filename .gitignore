@@ -13,3 +13,6 @@ log.txt
 logs.txt
 *.log
 *.logs
+
+# private
+private/

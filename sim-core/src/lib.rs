@@ -3,11 +3,10 @@
 
 mod particle;
 mod simulation;
+mod units;
 
 pub use particle::Particle;
 pub use simulation::Simulation;
-
-// TODO: Proper PDG Scaling
 
 /// Coulomb's constant in simulation units (not SI, as real SI units
 /// would be either super large or small at the scale rendered)

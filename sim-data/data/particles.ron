@@ -1,0 +1,48 @@
+[
+    // --- Leptons ---
+    (pdg_id: 11, name: "Electron", symbol: "e-", category: Lepton,
+        mass_mev: 0.51099895, charge_thirds: -3, spin_halves: 1, lifetime_s: None),
+    (pdg_id: 12, name: "Electron Neutrino", symbol: "nu_e", category: Lepton,
+        mass_mev: 0.0, charge_thirds: 0, spin_halves: 1, lifetime_s: None),
+    (pdg_id: 13, name: "Muon", symbol: "mu-", category: Lepton,
+        mass_mev: 105.6583755, charge_thirds: -3, spin_halves: 1, lifetime_s: Some(2.1969811e-6)),
+    (pdg_id: 14, name: "Muon Neutrino", symbol: "nu_mu", category: Lepton,
+        mass_mev: 0.0, charge_thirds: 0, spin_halves: 1, lifetime_s: None),
+    (pdg_id: 15, name: "Tau", symbol: "tau-", category: Lepton,
+        mass_mev: 1776.86, charge_thirds: -3, spin_halves: 1, lifetime_s: Some(2.903e-13)),
+    (pdg_id: 16, name: "Tau Neutrino", symbol: "nu_tau", category: Lepton,
+        mass_mev: 0.0, charge_thirds: 0, spin_halves: 1, lifetime_s: None),
+
+    // --- Quarks ---
+    (pdg_id: 1, name: "Down Quark", symbol: "d", category: Quark,
+        mass_mev: 4.67, charge_thirds: -1, spin_halves: 1, lifetime_s: None),
+    (pdg_id: 2, name: "Up Quark", symbol: "u", category: Quark,
+        mass_mev: 2.16, charge_thirds: 2, spin_halves: 1, lifetime_s: None),
+    (pdg_id: 3, name: "Strange Quark", symbol: "s", category: Quark,
+        mass_mev: 93.4, charge_thirds: -1, spin_halves: 1, lifetime_s: None),
+    (pdg_id: 4, name: "Charm Quark", symbol: "c", category: Quark,
+        mass_mev: 1270.0, charge_thirds: 2, spin_halves: 1, lifetime_s: None),
+    (pdg_id: 5, name: "Bottom Quark", symbol: "b", category: Quark,
+        mass_mev: 4180.0, charge_thirds: -1, spin_halves: 1, lifetime_s: None),
+    (pdg_id: 6, name: "Top Quark", symbol: "t", category: Quark,
+        mass_mev: 172570.0, charge_thirds: 2, spin_halves: 1, lifetime_s: Some(5.0e-25)),
+
+    // --- Bosons ---
+    (pdg_id: 21, name: "Gluon", symbol: "g", category: Boson,
+        mass_mev: 0.0, charge_thirds: 0, spin_halves: 2, lifetime_s: None),
+    (pdg_id: 22, name: "Photon", symbol: "gamma", category: Boson,
+        mass_mev: 0.0, charge_thirds: 0, spin_halves: 2, lifetime_s: None),
+    (pdg_id: 23, name: "Z Boson", symbol: "Z0", category: Boson,
+        mass_mev: 91187.6, charge_thirds: 0, spin_halves: 2, lifetime_s: Some(2.64e-25)),
+    (pdg_id: 24, name: "W Boson", symbol: "W+", category: Boson,
+        mass_mev: 80369.2, charge_thirds: 3, spin_halves: 2, lifetime_s: Some(3.2e-25)),
+    (pdg_id: 25, name: "Higgs Boson", symbol: "H0", category: Boson,
+        mass_mev: 125250.0, charge_thirds: 0, spin_halves: 0, lifetime_s: Some(1.56e-22)),
+
+    // --- hadrons (composite, for now treated as opaque Phase-3 particles;
+    //     Phase 4 will decompose the proton into bound quarks) ---
+    (pdg_id: 2212, name: "Proton", symbol: "p", category: Baryon,
+        mass_mev: 938.27208943, charge_thirds: 3, spin_halves: 1, lifetime_s: None),
+    (pdg_id: 2112, name: "Neutron", symbol: "n", category: Baryon,
+        mass_mev: 939.56542194, charge_thirds: 0, spin_halves: 1, lifetime_s: Some(879.4)),
+]

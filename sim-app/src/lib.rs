@@ -18,9 +18,23 @@ use camera::Camera;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-const DEMO_PARTICLE_COUNT: usize = 40;
 const INSTANCE_CAPACITY: usize = 2048;
 const MAX_DT: f32 = 0.05; // clamp so a slow frame doesn't blow up the sim
+
+fn clamped_surface_size(
+    size: winit::dpi::PhysicalSize<u32>,
+    max_dim: u32,
+) -> winit::dpi::PhysicalSize<u32> {
+    if size.width == 0 || size.height == 0 {
+        return winit::dpi::PhysicalSize::new(1, 1);
+    }
+
+    let scale = (max_dim as f64 / size.width.max(size.height) as f64).min(1.0);
+    winit::dpi::PhysicalSize::new(
+        ((size.width as f64 * scale).round() as u32).max(1),
+        ((size.height as f64 * scale).round() as u32).max(1),
+    )
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -154,34 +168,81 @@ impl CameraUniform {
     }
 }
 
-fn spawn_demo_particles(count: usize) -> sim_core::Simulation {
+/// Spawns one instance of every species currently wired in from
+/// sim-data, arranged on staggered rings so nothing perfectly overlaps.
+/// Real particle counts/spawning becomes user-driven in Phase 7; this
+/// is a showcase to confirm real PDG data is flowing all the way
+/// through to rendering.
+fn spawn_pdg_showcase() -> sim_core::Simulation {
     let mut rng = rand::thread_rng();
     let mut sim = sim_core::Simulation::new();
-    for _ in 0..count {
-        let angle = rng.gen_range(0.0..std::f32::consts::TAU);
-        let radius = rng.gen_range(0.5..4.0);
-        let position = Vec3::new(angle.cos() * radius, angle.sin() * radius, 0.0);
-        let charge = if rng.gen_bool(0.5) { 1.0 } else { -1.0 };
-        let mass = rng.gen_range(0.5..2.0);
+    let species: Vec<_> = sim_data::all().collect();
+    let n = species.len();
+
+    for (i, s) in species.iter().enumerate() {
+        let angle = (i as f32 / n as f32) * std::f32::consts::TAU;
+        let ring = 2.5 + 1.5 * (i % 3) as f32;
+        let jitter = rng.gen_range(-0.2..0.2);
+        let position = Vec3::new(
+            angle.cos() * (ring + jitter),
+            angle.sin() * (ring + jitter),
+            0.0,
+        );
         sim.particles
-            .push(sim_core::Particle::new(position, mass, charge));
+            .push(sim_core::Particle::from_species(s, position));
     }
+
     sim
+}
+
+/// Fixed per-category render radius. Real mass ranges from 0 (photon) to
+/// ~337,735 electron masses (top quark) in natural units, so radius
+/// can't scale off raw mass the way Phase 2's demo did as itd make the
+/// heaviest quarks fill the screen.
+fn base_radius(category: sim_data::ParticleCategory) -> f32 {
+    use sim_data::ParticleCategory::*;
+    match category {
+        Lepton => 0.10,
+        Quark => 0.14,
+        Boson => 0.16,
+        Baryon => 0.22,
+        Meson => 0.18,
+    }
+}
+
+fn color_for(charge_thirds: i8) -> [f32; 3] {
+    match charge_thirds.signum() {
+        1 => [1.0, 0.35, 0.25], // positive: warm red-orange
+        -1 => [0.3, 0.55, 1.0], // negative: cool blue
+        _ => [0.65, 0.65, 0.7], // neutral: grey
+    }
 }
 
 fn build_instances(sim: &sim_core::Simulation) -> Vec<ParticleInstance> {
     sim.particles
         .iter()
         .map(|p| {
-            let color = if p.charge > 0.0 {
-                [1.0, 0.35, 0.25]
-            } else {
-                [0.3, 0.55, 1.0]
-            };
+            let species = p.pdg_id.and_then(sim_data::by_pdg_id);
+
+            let charge_thirds = species
+                .map(|s| s.charge_thirds)
+                .unwrap_or(if p.charge > 0.0 {
+                    3
+                } else if p.charge < 0.0 {
+                    -3
+                } else {
+                    0
+                });
+            let color = color_for(charge_thirds);
+
+            let radius = species
+                .map(|s| base_radius(s.category))
+                .unwrap_or(0.12 + 0.04 * p.mass.min(3.0));
+
             ParticleInstance {
                 position: [p.position.x, p.position.y],
                 color,
-                radius: 0.12 + 0.04 * p.mass,
+                radius,
             }
         })
         .collect()
@@ -209,6 +270,7 @@ struct State {
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    cursor_pos: Vec2,
 
     simulation: sim_core::Simulation,
     last_frame: web_time::Instant,
@@ -264,12 +326,14 @@ impl State {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
+        let max_dim = device.limits().max_texture_dimension_2d;
+        let surface_size = clamped_surface_size(size, max_dim);
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
-            width: size.width.max(1),
-            height: size.height.max(1),
+            width: surface_size.width,
+            height: surface_size.height,
             present_mode: surface_caps.present_modes[0],
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
@@ -462,7 +526,7 @@ impl State {
                 usage: wgpu::BufferUsages::VERTEX,
             });
 
-        let simulation = spawn_demo_particles(DEMO_PARTICLE_COUNT);
+        let simulation = spawn_pdg_showcase();
 
         Self {
             surface,
@@ -483,6 +547,7 @@ impl State {
             camera_uniform,
             camera_buffer,
             camera_bind_group,
+            cursor_pos: Vec2::ZERO,
             simulation,
             last_frame: web_time::Instant::now(),
             pressed_keys: HashSet::new(),
@@ -491,9 +556,10 @@ impl State {
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
-            self.size = new_size;
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
+            let max_dim = self.device.limits().max_texture_dimension_2d;
+            self.size = clamped_surface_size(new_size, max_dim);
+            self.config.width = self.size.width;
+            self.config.height = self.size.height;
             self.surface.configure(&self.device, &self.config);
         }
     }
@@ -509,13 +575,22 @@ impl State {
         }
     }
 
+    fn handle_cursor_moved(&mut self, position: winit::dpi::PhysicalPosition<f64>) {
+        self.cursor_pos = Vec2::new(position.x as f32, position.y as f32);
+    }
+
     fn handle_scroll(&mut self, delta: MouseScrollDelta) {
         let scroll_y = match delta {
             MouseScrollDelta::LineDelta(_, y) => y,
             MouseScrollDelta::PixelDelta(pos) => (pos.y / 100.0) as f32,
         };
         let zoom_factor = 1.0 - scroll_y * 0.1;
-        self.camera.zoom_by(zoom_factor);
+        let aspect = self.config.width as f32 / self.config.height as f32;
+        let screen_size = Vec2::new(self.config.width as f32, self.config.height as f32);
+        let world_point = self
+            .camera
+            .screen_to_world(self.cursor_pos, screen_size, aspect);
+        self.camera.zoom_at(zoom_factor, world_point);
     }
 
     fn update(&mut self) {
@@ -635,26 +710,31 @@ pub async fn run() {
     }
 
     let event_loop = EventLoop::new().unwrap();
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("Particle Physics Simulator")
-            .build(&event_loop)
-            .unwrap(),
-    );
 
     #[cfg(target_arch = "wasm32")]
-    {
-        use winit::platform::web::WindowExtWebSys;
-        web_sys::window()
+    let window_builder = {
+        use wasm_bindgen::JsCast;
+        use winit::platform::web::WindowBuilderExtWebSys;
+
+        let canvas = web_sys::window()
             .and_then(|win| win.document())
-            .and_then(|doc| doc.get_element_by_id("wasm-canvas"))
-            .and_then(|dst| {
-                let canvas = window.canvas()?;
+            .and_then(|doc| {
+                let canvas = doc.create_element("canvas").ok()?;
                 canvas.set_id("sim-canvas");
-                dst.append_child(&canvas).ok()
+                let dst = doc.get_element_by_id("wasm-canvas")?;
+                dst.append_child(&canvas).ok()?;
+                canvas.dyn_into::<web_sys::HtmlCanvasElement>().ok()
             })
-            .expect("couldn't append canvas to document");
-    }
+            .expect("couldn't create/attach canvas");
+
+        WindowBuilder::new()
+            .with_title("Particle Physics Simulator")
+            .with_canvas(Some(canvas))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let window_builder = WindowBuilder::new().with_title("Particle Physics Simulator");
+
+    let window = Arc::new(window_builder.build(&event_loop).unwrap());
 
     let mut state = State::new(window.clone()).await;
 
@@ -668,6 +748,10 @@ pub async fn run() {
                     WindowEvent::CloseRequested => elwt.exit(),
                     WindowEvent::Resized(physical_size) => state.resize(physical_size),
                     WindowEvent::MouseWheel { delta, .. } => state.handle_scroll(delta),
+                    WindowEvent::CursorMoved { position, .. } => {
+                        state.handle_cursor_moved(position)
+                    }
+
                     WindowEvent::KeyboardInput {
                         event:
                             winit::event::KeyEvent {
