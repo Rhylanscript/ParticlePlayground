@@ -17,6 +17,7 @@ glam = "0.29"
 rand = "0.8"
 web-time = "1.1"
 sim-core = { path = "../sim-core" }
+sim-data = { path = "../sim-data" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11"

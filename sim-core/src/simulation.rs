@@ -34,8 +34,10 @@ impl Simulation {
         }
 
         for (particle, force) in self.particles.iter_mut().zip(forces) {
-            let acceleration = force / particle.mass;
-            particle.velocity += acceleration * dt;
+            if particle.mass > 0.0 {
+                let acceleration = force / particle.mass;
+                particle.velocity += acceleration * dt;
+            }
             particle.position += particle.velocity * dt;
         }
     }
