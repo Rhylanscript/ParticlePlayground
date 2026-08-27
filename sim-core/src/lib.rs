@@ -1,6 +1,9 @@
 //! sim-core: solely physics/logic library for the particle simulator
 //! zero rendering dependencies so its independently testable
 
+mod bound_group;
+pub mod color;
+mod forces;
 mod particle;
 mod simulation;
 mod units;
