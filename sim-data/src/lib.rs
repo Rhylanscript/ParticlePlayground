@@ -95,6 +95,26 @@ pub mod pdg {
     pub const PROTON: i32 = 2212;
 }
 
+/// Constituent valence-quark PDG ids for baryons that are currently
+/// wired in as opaque single-particle entries (proton, neutron). This
+/// intentionally does NOT replace those `ParticleSpecies` rows,
+/// `by_pdg_id(pdg::PROTON)` still returns the proton's own mass/charge/
+/// lifetime metadata, which Phase 5 decay needs. This is a separate
+/// lookup used only at spawn time to decide what to actually push into
+/// the simulation (3 quarks) instead of 1 baryon particle.
+///
+/// Order matches `ColorCharge::BARYON_TRIPLET` (Red, Green, Blue) when
+/// consumed by the spawn code, which specific quark gets which color
+/// is arbitrary (color assignment is a bookkeeping choice, not physical
+/// fact at this level of approximation), so any fixed order is fine.
+pub fn constituent_quarks(baryon_pdg_id: i32) -> Option<[i32; 3]> {
+    match baryon_pdg_id {
+        pdg::PROTON => Some([pdg::UP_QUARK, pdg::UP_QUARK, pdg::DOWN_QUARK]),
+        pdg::NEUTRON => Some([pdg::UP_QUARK, pdg::DOWN_QUARK, pdg::DOWN_QUARK]),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +135,39 @@ mod tests {
     fn proton_charge_is_exact_positive_one() {
         let p = by_pdg_id(pdg::PROTON).unwrap();
         assert_eq!(p.charge_e(), 1.0);
+    }
+
+    #[test]
+    fn proton_decomposes_to_uud() {
+        let quarks = constituent_quarks(pdg::PROTON).unwrap();
+        assert_eq!(quarks, [pdg::UP_QUARK, pdg::UP_QUARK, pdg::DOWN_QUARK]);
+    }
+
+    #[test]
+    fn neutron_decomposes_to_udd() {
+        let quarks = constituent_quarks(pdg::NEUTRON).unwrap();
+        assert_eq!(quarks, [pdg::UP_QUARK, pdg::DOWN_QUARK, pdg::DOWN_QUARK]);
+    }
+
+    #[test]
+    fn electron_has_no_constituent_quarks() {
+        assert!(constituent_quarks(pdg::ELECTRON).is_none());
+    }
+
+    #[test]
+    fn baryon_charge_matches_sum_of_quark_charges() {
+        for &baryon_id in &[pdg::PROTON, pdg::NEUTRON] {
+            let baryon = by_pdg_id(baryon_id).unwrap();
+            let quark_sum: i8 = constituent_quarks(baryon_id)
+                .unwrap()
+                .iter()
+                .map(|&qid| by_pdg_id(qid).unwrap().charge_thirds)
+                .sum();
+            assert_eq!(
+                baryon.charge_thirds, quark_sum,
+                "{} charge should equal sum of its quarks charges",
+                baryon.name
+            );
+        }
     }
 }
