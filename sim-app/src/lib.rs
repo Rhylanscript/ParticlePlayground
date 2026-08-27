@@ -1,4 +1,5 @@
 mod camera;
+mod display;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use winit::{
 };
 
 use camera::Camera;
+use display::DisplayEntity;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -173,6 +175,7 @@ impl CameraUniform {
 /// Real particle counts/spawning becomes user-driven in Phase 7; this
 /// is a showcase to confirm real PDG data is flowing all the way
 /// through to rendering.
+#[allow(dead_code)]
 fn spawn_pdg_showcase() -> sim_core::Simulation {
     let mut rng = rand::thread_rng();
     let mut sim = sim_core::Simulation::new();
@@ -183,23 +186,88 @@ fn spawn_pdg_showcase() -> sim_core::Simulation {
         let angle = (i as f32 / n as f32) * std::f32::consts::TAU;
         let ring = 2.5 + 1.5 * (i % 3) as f32;
         let jitter = rng.gen_range(-0.2..0.2);
-        let position = Vec3::new(
+        let center = Vec3::new(
             angle.cos() * (ring + jitter),
             angle.sin() * (ring + jitter),
             0.0,
         );
-        sim.particles
-            .push(sim_core::Particle::from_species(s, position));
+
+        if let Some(quark_ids) = sim_data::constituent_quarks(s.pdg_id) {
+            spawn_baryon(&mut sim, s.pdg_id, quark_ids, center);
+        } else {
+            sim.particles
+                .push(sim_core::Particle::from_species(s, center));
+        }
     }
 
     sim
+}
+
+/// Minimal scene for validating bound-group behavior in isolation, no
+/// other particles to perturb or visually clutter the baryons being
+/// watched. Swap this in for `spawn_pdg_showcase()` in `run()` when
+/// debugging confinement/aggregation; swap back for the full showcase.
+#[allow(dead_code)]
+fn spawn_baryon_isolation_test() -> sim_core::Simulation {
+    let mut sim = sim_core::Simulation::new();
+
+    let proton = sim_data::by_pdg_id(sim_data::pdg::PROTON).unwrap();
+    spawn_baryon(
+        &mut sim,
+        proton.pdg_id,
+        sim_data::constituent_quarks(proton.pdg_id).unwrap(),
+        Vec3::new(-1.5, 0.0, 0.0),
+    );
+
+    let neutron = sim_data::by_pdg_id(sim_data::pdg::NEUTRON).unwrap();
+    spawn_baryon(
+        &mut sim,
+        neutron.pdg_id,
+        sim_data::constituent_quarks(neutron.pdg_id).unwrap(),
+        Vec3::new(1.5, 0.0, 0.0),
+    );
+
+    sim
+}
+
+/// Spawns a baryon (proton/neutron) as 3 tagged, color singlet quarks
+/// clustered around `center`, instead of 1 opaque particle. Per the
+/// Phase 4 architecture decision: no `Particle` for pdg_id 2212/2112
+/// ever exists at runtime once this runs "proton-ness" is emergent
+/// from 3 correctly tagged quarks that the Cornell force holds
+/// together, not a distinct struct.
+fn spawn_baryon(
+    sim: &mut sim_core::Simulation,
+    baryon_pdg_id: i32,
+    quark_pdg_ids: [i32; 3],
+    center: Vec3,
+) {
+    let group_id = sim.create_bound_group(baryon_pdg_id);
+    // Small initial spread so the 3 quarks aren't spawned exactly
+    // coincident (which would make the Cornell force's direction
+    // undefined at r=0 before softening kicks in) and so you can
+    // visually see 3 distinct points before confinement pulls them in.
+    let cluster_radius = 0.3;
+
+    for (i, &quark_id) in quark_pdg_ids.iter().enumerate() {
+        let quark_species = sim_data::by_pdg_id(quark_id)
+            .expect("constituent_quarks should only return wired-in quark pdg ids");
+        let sub_angle = (i as f32 / 3.0) * std::f32::consts::TAU;
+        let position = center + Vec3::new(sub_angle.cos(), sub_angle.sin(), 0.0) * cluster_radius;
+        let color = sim_core::color::ColorCharge::BARYON_TRIPLET[i];
+
+        sim.particles.push(
+            sim_core::Particle::from_species(quark_species, position)
+                .with_bound_group(group_id, color),
+        );
+    }
 }
 
 /// Fixed per-category render radius. Real mass ranges from 0 (photon) to
 /// ~337,735 electron masses (top quark) in natural units, so radius
 /// can't scale off raw mass the way Phase 2's demo did as itd make the
 /// heaviest quarks fill the screen.
-fn base_radius(category: sim_data::ParticleCategory) -> f32 {
+pub(crate) fn base_radius(category: sim_data::ParticleCategory) -> f32 {
     use sim_data::ParticleCategory::*;
     match category {
         Lepton => 0.10,
@@ -210,42 +278,51 @@ fn base_radius(category: sim_data::ParticleCategory) -> f32 {
     }
 }
 
-fn color_for(charge_thirds: i8) -> [f32; 3] {
+pub(crate) fn color_for(charge_thirds: i8) -> [f32; 3] {
     match charge_thirds.signum() {
-        1 => [1.0, 0.35, 0.25], // positive: warm red-orange
-        -1 => [0.3, 0.55, 1.0], // negative: cool blue
+        1 => [1.0, 0.65, 0.15], // positive: orange
+        -1 => [0.2, 0.8, 0.9],  // negative: cyan
         _ => [0.65, 0.65, 0.7], // neutral: grey
     }
 }
 
-fn build_instances(sim: &sim_core::Simulation) -> Vec<ParticleInstance> {
-    sim.particles
+fn build_instances(entities: &[DisplayEntity]) -> Vec<ParticleInstance> {
+    entities
         .iter()
-        .map(|p| {
-            let species = p.pdg_id.and_then(sim_data::by_pdg_id);
-
-            let charge_thirds = species
-                .map(|s| s.charge_thirds)
-                .unwrap_or(if p.charge > 0.0 {
-                    3
-                } else if p.charge < 0.0 {
-                    -3
-                } else {
-                    0
-                });
-            let color = color_for(charge_thirds);
-
-            let radius = species
-                .map(|s| base_radius(s.category))
-                .unwrap_or(0.12 + 0.04 * p.mass.min(3.0));
-
-            ParticleInstance {
-                position: [p.position.x, p.position.y],
-                color,
-                radius,
-            }
+        .map(|e| ParticleInstance {
+            position: [e.position.x, e.position.y],
+            color: e.color,
+            radius: e.radius,
         })
         .collect()
+}
+
+/// Debug diagnostic: logs each bound group's member count and the
+/// largest pairwise distance between its members, once a second.
+/// Lets us confirm confinement is actually holding groups together
+/// (bounded, roughly stable distance) vs. numerically diverging
+/// (distance climbing every log line) without guessing from a
+/// screenshot where tagged vs. charge colors can look similar.
+fn log_group_cohesion(sim: &sim_core::Simulation) {
+    use std::collections::HashMap;
+    let mut groups: HashMap<u32, Vec<Vec3>> = HashMap::new();
+    for p in &sim.particles {
+        if let Some(gid) = p.bound_group {
+            groups.entry(gid).or_default().push(p.position);
+        }
+    }
+    for (gid, positions) in &groups {
+        let mut max_dist = 0.0f32;
+        for i in 0..positions.len() {
+            for j in (i + 1)..positions.len() {
+                max_dist = max_dist.max(positions[i].distance(positions[j]));
+            }
+        }
+        log::info!(
+            "bound_group {gid}: {} members, max pairwise distance = {max_dist:.3}",
+            positions.len()
+        );
+    }
 }
 
 struct State {
@@ -274,7 +351,9 @@ struct State {
 
     simulation: sim_core::Simulation,
     last_frame: web_time::Instant,
+    last_group_log: web_time::Instant,
     pressed_keys: HashSet<KeyCode>,
+    instance_count: u32,
 }
 
 impl State {
@@ -550,7 +629,9 @@ impl State {
             cursor_pos: Vec2::ZERO,
             simulation,
             last_frame: web_time::Instant::now(),
+            last_group_log: web_time::Instant::now(),
             pressed_keys: HashSet::new(),
+            instance_count: 0,
         }
     }
 
@@ -598,6 +679,11 @@ impl State {
         let dt = (now - self.last_frame).as_secs_f32().min(MAX_DT);
         self.last_frame = now;
 
+        if (now - self.last_group_log).as_secs_f32() > 1.0 {
+            log_group_cohesion(&self.simulation);
+            self.last_group_log = now;
+        }
+
         let pan_speed = self.camera.zoom * 0.6 * dt;
         let mut pan = Vec2::ZERO;
         if self.pressed_keys.contains(&KeyCode::KeyW)
@@ -639,7 +725,9 @@ impl State {
             bytemuck::cast_slice(&[self.grid_uniform]),
         );
 
-        let instances = build_instances(&self.simulation);
+        let entities = display::build_display_entities(&self.simulation);
+        let instances = build_instances(&entities);
+        self.instance_count = instances.len().min(INSTANCE_CAPACITY) as u32;
         self.queue
             .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
     }
@@ -656,7 +744,7 @@ impl State {
                 label: Some("render encoder"),
             });
 
-        let instance_count = self.simulation.particles.len().min(INSTANCE_CAPACITY) as u32;
+        let instance_count = self.instance_count;
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

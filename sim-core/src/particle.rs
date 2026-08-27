@@ -1,6 +1,7 @@
 use glam::Vec3;
 use sim_data::ParticleSpecies;
 
+use crate::color::ColorCharge;
 use crate::units;
 
 /// A single simulated particle. Phase 2 keeps this generic (just the
@@ -14,6 +15,17 @@ pub struct Particle {
     pub mass: f32,
     pub charge: f32,
     pub pdg_id: Option<i32>,
+
+    /// Id shared by all particles confined in the same color-singlet
+    /// group (e.g. the 3 quarks making up a proton). `None` for
+    /// particles that aren't part of a bound group. Looked up in
+    /// `Simulation::bound_groups` for group-level metadata.
+    pub bound_group: Option<u32>,
+
+    /// Discrete color tag, only meaningful when `bound_group` is
+    /// `Some`. See `ColorCharge` docs — this is a confinement
+    /// bookkeeping tag, not a real SU(3) color simulation.
+    pub color_charge: Option<ColorCharge>,
 }
 
 impl Particle {
@@ -24,6 +36,8 @@ impl Particle {
             mass,
             charge,
             pdg_id: None,
+            bound_group: None,
+            color_charge: None,
         }
     }
 
@@ -37,11 +51,23 @@ impl Particle {
             mass: units::mass_from_mev(species.mass_mev),
             charge: units::charge_from_thirds(species.charge_thirds),
             pdg_id: Some(species.pdg_id),
+            bound_group: None,
+            color_charge: None,
         }
     }
 
     pub fn with_velocity(mut self, velocity: Vec3) -> Self {
         self.velocity = velocity;
+        self
+    }
+
+    /// Tags this particle as a member of a color-singlet bound group.
+    /// Used when spawning a baryon's constituent quarks, each gets a
+    /// distinct `ColorCharge` from `ColorCharge::BARYON_TRIPLET` and
+    /// the same `group_id`.
+    pub fn with_bound_group(mut self, group_id: u32, color: ColorCharge) -> Self {
+        self.bound_group = Some(group_id);
+        self.color_charge = Some(color);
         self
     }
 }
